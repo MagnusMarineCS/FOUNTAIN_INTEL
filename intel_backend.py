@@ -2,6 +2,8 @@ import asyncio
 import websockets
 import os, glob, time, re, json, copy
 from collections import deque
+import tkinter as tk
+from tkinter import filedialog, messagebox
 
 # --- CONFIGURATION LOADER ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -9,17 +11,94 @@ CONFIG_FILE = os.path.join(BASE_DIR, "intel_config.json")
 MAP_DATA_FILE = os.path.join(BASE_DIR, "eve_map_data.json")
 
 def load_cfg():
+    if not os.path.exists(CONFIG_FILE):
+        return {}
     try:
-        return json.load(open(CONFIG_FILE, 'r'))
-    except:
+        with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except (json.JSONDecodeError, IOError):
         return {}
 
+def save_cfg(config_data):
+    try:
+        with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+            json.dump(config_data, f, indent=4)
+        return True
+    except IOError:
+        return False
+
+def get_log_dir_from_user():
+    """
+    Uses Tkinter to show a folder selection dialog to the user.
+    Asks for the 'Chatlogs' directory and returns its parent ('logs').
+    """
+    root = tk.Tk()
+    root.withdraw()  # Hide the main Tkinter window
+
+    messagebox.showinfo(
+        "EVE Intel Setup",
+        "Please select your EVE Online 'Chatlogs' directory.\n\n"
+        "This is typically found inside your 'Documents/EVE/logs/' folder."
+    )
+
+    # askdirectory returns the path to the selected directory
+    selected_dir = filedialog.askdirectory(title="Select EVE 'Chatlogs' Directory")
+
+    if not selected_dir:
+        messagebox.showerror("Setup Cancelled", "No directory was selected. The application cannot continue.")
+        return None
+
+    # We need to check if the selected directory is actually named 'Chatlogs'
+    if os.path.basename(os.path.normpath(selected_dir)).lower() != 'chatlogs':
+        messagebox.showwarning(
+            "Directory Invalid",
+            f"The folder you selected is not named 'Chatlogs'.\n\n"
+            f"You selected: {selected_dir}\n\n"
+            "Please find and select the 'Chatlogs' directory itself."
+        )
+        return None
+    
+    # The user has selected the Chatlogs directory. We need to save its PARENT to the config.
+    # The rest of the script expects the 'root_log_dir' to be the parent of 'Chatlogs'.
+    parent_dir = os.path.dirname(selected_dir)
+    return parent_dir
+
+
 cfg = load_cfg()
-root_log_dir = cfg.get("eve_log_root")
-if root_log_dir:
-    EVE_LOG_DIR = os.path.normpath(os.path.join(root_log_dir, "Chatlogs"))
-else:
-    EVE_LOG_DIR = os.path.normpath(os.path.expanduser("~/Documents/EVE/logs/Chatlogs"))
+
+# --- Path Validation and User Prompting ---
+def find_and_validate_log_dir(current_cfg):
+    # 1. Try the configured path first
+    config_path = current_cfg.get("eve_log_root")
+    if config_path and os.path.isdir(os.path.join(config_path, "Chatlogs")):
+        print(f"[*] Using configured log directory: {config_path}")
+        return config_path
+
+    # 2. If config is bad/missing, try the default location
+    default_log_parent = os.path.normpath(os.path.expanduser("~/Documents/EVE/logs"))
+    if os.path.isdir(os.path.join(default_log_parent, "Chatlogs")):
+        print(f"[*] Found EVE log directory at default location: {default_log_parent}")
+        current_cfg['eve_log_root'] = default_log_parent
+        save_cfg(current_cfg)
+        return default_log_parent
+
+    # 3. If all else fails, prompt the user
+    print("[*] EVE log directory not configured or is invalid. Prompting user for location...")
+    new_log_dir_parent = get_log_dir_from_user()
+    
+    if new_log_dir_parent:
+        current_cfg["eve_log_root"] = new_log_dir_parent
+        save_cfg(current_cfg)
+        return new_log_dir_parent
+    
+    # 4. If user cancels, we can't continue
+    messagebox.showerror("Setup Failed", "A valid EVE log directory is required to run. Exiting.")
+    print("[!] No valid log directory provided. Exiting.")
+    exit()
+
+# Get the validated log directory path
+root_log_dir = find_and_validate_log_dir(cfg)
+EVE_LOG_DIR = os.path.normpath(os.path.join(root_log_dir, "Chatlogs"))
 
 ALERT_DURATION = 180
 
