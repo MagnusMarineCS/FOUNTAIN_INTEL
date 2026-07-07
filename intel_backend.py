@@ -134,17 +134,16 @@ def get_initial_system():
         system_change_regex = re.compile(r"Channel changed to Local\s*:\s*([\w\- ]+)", re.IGNORECASE)
         
         current_system = None
-        encodings = ['utf-8', 'utf-16', 'latin-1']
-        for enc in encodings:
-            try:
-                with open(latest_file, 'r', encoding=enc, errors='ignore') as f:
-                    for line in f:
-                        clean_line = line.strip().replace('\ufeff', '')
-                        match = system_change_regex.search(clean_line)
-                        if match:
-                            current_system = match.group(1).strip()
-                if current_system: break
-            except Exception: continue
+        # EVE logs are UTF-16, so we read with that encoding directly.
+        try:
+            with open(latest_file, 'r', encoding='utf-16', errors='ignore') as f:
+                for line in f:
+                    clean_line = line.strip().replace('\ufeff', '')
+                    match = system_change_regex.search(clean_line)
+                    if match:
+                        current_system = match.group(1).strip()
+        except Exception as e:
+            print(f"[!] Error reading initial system file with utf-16: {e}")
         
         if current_system:
             print(f"[*] Determined initial system from log file: {current_system}")
@@ -207,7 +206,7 @@ class BackendMonitor:
                 all_ship_names = set(self.ship_data.keys())
                 for ship_name in all_ship_names:
                     # Find potential base hulls by checking for prefixes
-                    bases = [b for b in all_ship_names if ship_name.startswith(b) and b != ship_name]
+                    bases = [b for b in all_ship_names if ship_name.startswith(b + ' ') and b != ship_name]
                     if bases:
                         # The best base is the longest prefix match
                         self.ship_data[ship_name]['hull_name'] = max(bases, key=len)
@@ -276,16 +275,29 @@ class BackendMonitor:
             self.ui_distances = self.alert_distances
 
     def read_file_safely(self, path, last_pos):
-        encodings = ['utf-8', 'utf-16', 'latin-1']
-        for enc in encodings:
-            try:
-                with open(path, 'r', encoding=enc, errors='ignore') as f:
-                    f.seek(last_pos)
-                    lines = f.readlines()
-                    new_pos = f.tell()
-                    return lines, new_pos
-            except: continue
-        return [], last_pos
+        try:
+            # Always use binary mode for reading and seeking to ensure byte-level precision.
+            with open(path, 'rb') as f:
+                # Check if file was truncated or replaced
+                f.seek(0, 2)
+                if last_pos > f.tell():
+                    last_pos = 0
+                
+                f.seek(last_pos)
+                new_bytes = f.read()
+                new_pos = f.tell()
+
+            if not new_bytes:
+                return [], last_pos
+            
+            decoded_text = new_bytes.decode('utf-16', errors='replace')
+            
+            return decoded_text.splitlines(), new_pos
+        except FileNotFoundError:
+            return [], last_pos
+        except Exception as e:
+            print(f"[!] Error in read_file_safely for {path}: {e}")
+            return [], last_pos
 
     async def broadcast_state(self):
         if not self.connected_clients:
@@ -325,7 +337,7 @@ class BackendMonitor:
                 if latest_intel:
                     if latest_intel != self.intel_file:
                         self.intel_file = latest_intel
-                        with open(latest_intel, 'rb') as f: 
+                        with open(latest_intel, 'rb') as f:
                             f.seek(0, 2)
                             self.intel_pos = f.tell()
                         print(f"[*] Connected to Intel file: {os.path.basename(latest_intel)}")
@@ -338,6 +350,24 @@ class BackendMonitor:
                         if m:
                             ts, rep, body = m.groups()
                             bup = body.upper()
+
+                            # Format the timestamp for UI display, keeping only the time part.
+                            time_str = ts
+                            try:
+                                time_match = re.search(r'(\d{2}:\d{2}:\d{2})', ts)
+                                if time_match:
+                                    time_str = f"[{time_match.group(1)}]"
+                            except Exception: pass # Fallback to original ts
+                            
+                            # Expand common ship abbreviations to their full names for better matching.
+                            abbreviations = {
+                                r'\bNI\b': 'NAVY ISSUE',
+                                r'\bFI\b': 'FLEET ISSUE',
+                                r'\bNAVY\b(?!\s+ISSUE)': 'NAVY ISSUE',
+                                r'\bFLEET\b(?!\s+ISSUE)': 'FLEET ISSUE',
+                            }
+                            for abbr, full_text in abbreviations.items():
+                                bup = re.sub(abbr, full_text, bup)
                             
                             # --- SHIP DETECTION ---
                             ships_in_line_raw = []
@@ -384,13 +414,6 @@ class BackendMonitor:
                                 ui_body_html = "".join(new_html_parts)
 
                             if self.connected_clients:
-                                time_str = ts
-                                try:
-                                    time_match = re.search(r'(\d{2}:\d{2}:\d{2})', ts)
-                                    if time_match:
-                                        time_str = f"[{time_match.group(1)}]"
-                                except Exception:
-                                    pass # Fallback to original ts
                                 log_payload = json.dumps({"type": "log_line", "time": time_str, "text": f"{rep} > {ui_body_html}"})
                                 await asyncio.gather(*(client.send(log_payload) for client in self.connected_clients), return_exceptions=True)
 
@@ -452,14 +475,14 @@ class BackendMonitor:
                                         self.active_alerts[primary] = {
                                             "expiry": now + ALERT_DURATION, "dist": d_min, "cleared": False,
                                             "count": cnt_val, "is_spike": is_spike,
-                                            "trigger_intel": f"{ts} {rep} > {body}",
+                                            "trigger_intel": f"{time_str} {rep} > {body}",
                                             "ships": ship_counts, "pilots": set(parsed_pilots)
                                         }
                                     else:
                                         alert = self.active_alerts[primary]
                                         alert['expiry'] = now + ALERT_DURATION
                                         alert['is_spike'] = alert['is_spike'] or is_spike
-                                        alert['trigger_intel'] = f"{ts} {rep} > {body}"
+                                        alert['trigger_intel'] = f"{time_str} {rep} > {body}"
                                         if cnt_val: alert['count'] = cnt_val
                                         alert.setdefault('pilots', set()).update(parsed_pilots)
                                     state_changed = True
@@ -475,7 +498,7 @@ class BackendMonitor:
                 if latest_local:
                     if latest_local != self.local_chat_file:
                         self.local_chat_file = latest_local
-                        with open(latest_local, 'rb') as f: 
+                        with open(latest_local, 'rb') as f:
                             f.seek(0, 2)
                             self.local_chat_pos = f.tell()
                             

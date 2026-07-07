@@ -41,6 +41,14 @@
             justify-content: space-between;
         }
 
+        .header.status-offline {
+            color: #ff333c;
+            text-shadow: 0 0 10px rgba(255, 51, 60, 0.4);
+        }
+        .header.status-offline .oscillator {
+            display: none;
+        }
+
         .header-title {
             display: flex;
             align-items: center;
@@ -98,7 +106,7 @@
 
         .log-feed {
             flex: 1 1 auto; min-height: 0; background-color: #000; border: 1px solid var(--border-color);
-            padding: 10px; font-family: monospace; font-size: 14px; color: #888; overflow-y: auto;
+            padding: 10px; font-family: Consolas, "Courier New", "SimSun", "Microsoft YaHei", monospace; font-size: 14px; color: #888; overflow-y: auto;
         }
 
         .log-entry { margin-bottom: 8px; word-wrap: break-word; }
@@ -507,9 +515,9 @@
 <body>
 
     <div id="sidebar">
-        <div class="header">
+        <div class="header status-offline">
             <div class="header-title">
-                SYSTEM ONLINE
+                <span id="system-status-text">SYSTEM OFFLINE</span>
                 <svg class="oscillator" width="60" height="20" viewBox="0 0 60 20">
                   <path class="wave-path" d="M 0 10 C 10 0, 20 20, 30 10 S 50 0, 60 10">
                     <animate attributeName="d" values="M 0 10 C 10 0, 20 20, 30 10 S 50 0, 60 10; M 0 10 C 10 20, 20 0, 30 10 S 50 20, 60 10; M 0 10 C 10 0, 20 20, 30 10 S 50 0, 60 10" dur="1.5s" repeatCount="indefinite"></animate>
@@ -1013,6 +1021,11 @@
             ws = new WebSocket("ws://127.0.0.1:8000");
 
             ws.onopen = () => {
+                const header = document.querySelector('.header');
+                const statusText = document.getElementById('system-status-text');
+                header.classList.remove('status-offline');
+                statusText.textContent = "SYSTEM ONLINE";
+
                 const feed = document.querySelector('.log-feed');
                 feed.innerHTML += `<div class="log-entry">
                     <span class="log-time" style="color:#00ff00">[System]</span> Connected to local Python Engine successfully!
@@ -1096,6 +1109,11 @@
             };
 
             ws.onclose = () => {
+                const header = document.querySelector('.header');
+                const statusText = document.getElementById('system-status-text');
+                header.classList.add('status-offline');
+                statusText.textContent = "SYSTEM OFFLINE";
+
                 const feed = document.querySelector('.log-feed');
                 feed.innerHTML += `<div class="log-entry">
                     <span class="log-time" style="color:red">[System]</span> Disconnected! Attempting to reconnect...
@@ -1335,7 +1353,8 @@
             let hasRed = false;
             let hasYellow = false;
             let hasSpike = false;
-            let spikeSystem = '';
+            let latestSpikeSystem = null;
+            let latestSpikeTime = 0;
             let isFlashingRed = false;
             let isFlashingYellow = false;
             let isFlashingSpike = false;
@@ -1348,7 +1367,13 @@
                     if (activeAlerts[sys].is_spike) {
                         hasSpike = true;
                         if (isFlashing) isFlashingSpike = true;
-                        if (!spikeSystem) spikeSystem = sys;
+
+                        // Find the most recent spike alert based on when it was received
+                        const spikeTime = alertStartTimes[sys] || 0;
+                        if (spikeTime > latestSpikeTime) {
+                            latestSpikeTime = spikeTime;
+                            latestSpikeSystem = sys;
+                        }
                     }
 
                     if (activeAlerts[sys].dist <= RED_ALERT_DISTANCE) {
@@ -1372,10 +1397,14 @@
             if (hasSpike) {
                 titleColor = '#ff4500'; // Brighter Emergency Orange
                 titleShadowColor = 'rgba(255, 69, 0, 0.7)';
-                if (spikeSystem.startsWith('_TEST_')) {
-                    trafficLightBox.textContent = 'SPIKE';
-                } else {
-                    trafficLightBox.textContent = `SPIKE: ${spikeSystem}`;
+                if (latestSpikeSystem) {
+                    if (latestSpikeSystem.startsWith('_TEST_')) {
+                        trafficLightBox.textContent = 'SPIKE';
+                    } else {
+                        trafficLightBox.textContent = `SPIKE: ${latestSpikeSystem}`;
+                    }
+                } else if (hasSpike) {
+                    trafficLightBox.textContent = 'SPIKE'; // Fallback
                 }
                 if (!isFlashingSpike || flashState) {
                     classes.push('status-orange');
