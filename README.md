@@ -33,13 +33,15 @@ This tool provides at-a-glance situational awareness by parsing intel channels f
     ```
     pip install websockets
     ```
-3.  **Run the Backend:** In the folder where you unzipped the project, run the backend server from your terminal:
+3.  **Join Intel Channel in EVE:** For the dashboard to receive intel, you must have your intel channel (e.g., `I. Ftn Intel`) open in the EVE Online client. This is what creates the log file that the backend monitors.
+
+4.  **Run the Backend:** In the folder where you unzipped the project, run the backend server from your terminal:
     ```
     python intel_backend.py
     ```
     *   On the very first run, a window will pop up asking you to **select your EVE Online `Chatlogs` directory**. This is typically located in `Documents\EVE\logs\Chatlogs`. Once selected, this setting will be saved.
 
-4.  **Open the Dashboard:** Open the `EVE_Intel_Dashboard.html` file in your web browser. It will automatically connect to the running backend.
+5.  **Open the Dashboard:** Open the `EVE_Intel_Dashboard.html` file in your web browser. It will automatically connect to the running backend.
 
 ---
 
